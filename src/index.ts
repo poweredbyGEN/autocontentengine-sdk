@@ -6,8 +6,44 @@ export interface GenClientOptions {
   apiKey: string;
   /** Base URL for the API. Defaults to "https://api.gen.pro/v1". */
   baseUrl?: string;
+  /** Base URL for the Agent Chat API. Defaults to "https://agent.gen.pro/v1". */
+  agentBaseUrl?: string;
   /** Optional custom fetch implementation. Defaults to global fetch. */
   fetch?: typeof globalThis.fetch;
+}
+
+// ── Generation type resolver (canonical → Rails internal) ───────────────────
+
+const SIMPLE_TYPE_MAP: Record<string, string> = {
+  text: "text_generation",
+  speech_from_text: "eleven_labs",
+};
+
+const MODEL_ROUTED_TYPE_MAP: Record<string, (model: string) => string> = {
+  image_from_text: (model) =>
+    model === "midjourney" ? "midjourney" : "gemini_image_generation",
+  video_from_text: (model) => {
+    if (model.startsWith("sora")) return "sora2_video_generation";
+    if (model.startsWith("kling")) return "kling";
+    if (model.startsWith("seedance")) return "seedance_video_generation";
+    return "gemini_video_generation";
+  },
+  video_from_image: (model) => {
+    if (model.startsWith("kling")) return "kling_image_video";
+    if (model.startsWith("sora")) return "sora2_video_generation";
+    if (model.startsWith("seedance")) return "seedance_video_generation";
+    return "gemini_video_generation";
+  },
+};
+
+function resolveGenerationType(
+  canonicalType: string,
+  data?: Record<string, unknown>
+): string {
+  if (SIMPLE_TYPE_MAP[canonicalType]) return SIMPLE_TYPE_MAP[canonicalType];
+  const router = MODEL_ROUTED_TYPE_MAP[canonicalType];
+  if (router) return router(String(data?.model ?? ""));
+  return canonicalType;
 }
 
 /** Error response from the GEN API. */
@@ -198,6 +234,103 @@ export interface ListContentResourcesParams {
   page?: number;
 }
 
+// ── Agent Chat types ────────────────────────────────────────────────────────
+
+export interface RunResponse {
+  run_id: string;
+  conversation_id: string;
+  status: "running";
+  firebase_path: string;
+}
+
+export interface RunStatus {
+  run_id: string;
+  conversation_id: string;
+  status: "running" | "completed" | "failed";
+  messages: Array<{ role: string; content: string }>;
+}
+
+export interface Conversation {
+  id: string;
+  title?: string;
+  pinned?: boolean;
+  agent_id?: string;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface Idea {
+  id: number;
+  idea_id: number;
+  agent_id: string;
+  title: string;
+  hook: string;
+  description: string;
+  video_type: string;
+  video_type_id: number;
+  status: string;
+  data: Record<string, unknown>;
+  created_at: string;
+}
+
+export interface AgentProfile {
+  identity: {
+    name: string;
+    description?: string;
+    avatar_url?: string;
+    use_character?: boolean;
+    persona?: string;
+  };
+  voice: {
+    eleven_lab_api_key?: string;
+    hume_ai_api_key?: string;
+    default_voice?: { id: string; name: string; provider: string };
+  };
+  brand: {
+    brand_name?: string;
+    description?: string;
+    goal?: string;
+    keywords?: string[];
+    target_platforms?: string[];
+    shortform?: boolean;
+    longform?: boolean;
+    linked_accounts?: Array<{ id?: number; url: string; platform: string }>;
+    onboarding_status?: string;
+    content_idea_preferences?: string;
+  } | null;
+}
+
+export interface AgentProfileInput {
+  identity?: {
+    name?: string;
+    description?: string;
+    use_character?: boolean;
+    persona?: string;
+  };
+  voice?: {
+    eleven_lab_api_key?: string;
+    hume_ai_api_key?: string;
+  };
+  brand?: {
+    brand_name?: string;
+    description?: string;
+    goal?: string;
+    keywords?: string[];
+    target_platforms?: string[];
+    shortform?: boolean;
+    longform?: boolean;
+    content_idea_preferences?: string;
+  };
+}
+
+export interface GenerateIdeasOptions {
+  numIdeas?: number;
+  requirements?: string[];
+  videoType?: string;
+  conversationId?: string;
+  message?: string;
+}
+
 // ── Client ───────────────────────────────────────────────────────────────────
 
 /**
@@ -215,6 +348,7 @@ export interface ListContentResourcesParams {
 export class GenClient {
   private readonly apiKey: string;
   private readonly baseUrl: string;
+  private readonly agentBaseUrl: string;
   private readonly _fetch: typeof globalThis.fetch;
 
   constructor(options: GenClientOptions) {
@@ -226,6 +360,9 @@ export class GenClient {
       /\/$/,
       ""
     );
+    this.agentBaseUrl = (
+      options.agentBaseUrl ?? "https://agent.gen.pro/v1"
+    ).replace(/\/$/, "");
     this._fetch = options.fetch ?? globalThis.fetch;
   }
 
@@ -272,6 +409,45 @@ export class GenClient {
 
   private buildAgentQuery(agentId: string | number): string {
     return `?agent_id=${encodeURIComponent(String(agentId))}`;
+  }
+
+  private async agentRequest<T>(
+    method: string,
+    path: string,
+    body?: unknown
+  ): Promise<T> {
+    const url = `${this.agentBaseUrl}${path}`;
+    const headers: Record<string, string> = {
+      "X-API-Key": this.apiKey,
+      "Content-Type": "application/json",
+    };
+
+    const res = await this._fetch(url, {
+      method,
+      headers,
+      body: body !== undefined ? JSON.stringify(body) : undefined,
+    });
+
+    const text = await res.text();
+    let data: unknown;
+    try {
+      data = JSON.parse(text);
+    } catch {
+      data = text;
+    }
+
+    if (!res.ok) {
+      const errObj = data as Record<string, string> | undefined;
+      const error =
+        (errObj && typeof errObj === "object" && errObj.error) ||
+        `HTTP ${res.status}`;
+      const errorCode =
+        (errObj && typeof errObj === "object" && errObj.error_code) ||
+        "unknown_error";
+      throw new GenApiError(res.status, error, errorCode);
+    }
+
+    return data as T;
   }
 
   // ── Discovery ────────────────────────────────────────────────────────────
@@ -677,7 +853,8 @@ export class GenClient {
     generationType: string,
     data?: Record<string, unknown>
   ): Promise<GenerationResult> {
-    const body: Record<string, unknown> = { generation_type: generationType };
+    const railsType = resolveGenerationType(generationType, data);
+    const body: Record<string, unknown> = { generation_type: railsType };
     if (data) body.data = data;
     return this.request<GenerationResult>(
       "POST",
@@ -832,6 +1009,169 @@ export class GenClient {
     await this.request<unknown>(
       "DELETE",
       `/content_resources/${encodeURIComponent(String(resourceId))}${this.buildAgentQuery(agentId)}`
+    );
+  }
+
+  // ── Agent Chat (agent.gen.pro) ──────────────────────────────────────────
+
+  /**
+   * Generate data-driven content ideas for an agent.
+   * Returns a run — poll with {@link getRunStatus} until completed.
+   */
+  async generateIdeas(
+    agentId: string,
+    options?: GenerateIdeasOptions
+  ): Promise<RunResponse> {
+    let msg =
+      options?.message ??
+      `generate ${options?.numIdeas ?? 5} content ideas`;
+    if (options?.requirements?.length)
+      msg += ". Requirements: " + options.requirements.join(". ");
+    if (options?.videoType) msg += `. Use ${options.videoType} format only.`;
+
+    const body: Record<string, unknown> = { message: msg, agent_id: agentId };
+    if (options?.conversationId)
+      body.conversation_id = options.conversationId;
+    return this.agentRequest<RunResponse>("POST", "/agent/run", body);
+  }
+
+  /**
+   * Refine previously generated ideas by sending feedback in the same conversation.
+   */
+  async refineIdeas(
+    agentId: string,
+    conversationId: string,
+    feedback: string
+  ): Promise<RunResponse> {
+    return this.agentRequest<RunResponse>("POST", "/agent/run", {
+      message: feedback,
+      agent_id: agentId,
+      conversation_id: conversationId,
+    });
+  }
+
+  /**
+   * Set a persistent content generation preference for an agent.
+   * Applies to ALL future generations.
+   */
+  async setContentPreference(
+    agentId: string,
+    preference: string
+  ): Promise<RunResponse> {
+    return this.agentRequest<RunResponse>("POST", "/agent/run", {
+      message: `Remember this content preference for all future ideas: ${preference}`,
+      agent_id: agentId,
+    });
+  }
+
+  /**
+   * Poll the status of an agent run.
+   * Poll every 5 seconds until status is "completed".
+   */
+  async getRunStatus(runId: string): Promise<RunStatus> {
+    return this.agentRequest<RunStatus>("GET", `/agent/runs/${runId}`);
+  }
+
+  /**
+   * Wait for an agent run to complete, polling automatically.
+   */
+  async waitForRun(
+    runId: string,
+    options?: WaitForGenerationOptions
+  ): Promise<RunStatus> {
+    const pollInterval = options?.pollIntervalMs ?? 5000;
+    const timeout = options?.timeoutMs ?? 300_000;
+    const deadline = Date.now() + timeout;
+
+    while (Date.now() < deadline) {
+      const run = await this.getRunStatus(runId);
+      if (run.status === "completed") return run;
+      if (run.status === "failed") {
+        throw new GenApiError(422, `Run ${runId} failed`, "run_failed");
+      }
+      await new Promise((resolve) => setTimeout(resolve, pollInterval));
+    }
+    throw new Error(`Run ${runId} timed out after ${timeout}ms`);
+  }
+
+  /**
+   * Approve a pending agent action.
+   */
+  async approveRun(runId: string): Promise<void> {
+    await this.agentRequest<unknown>("POST", `/agent/runs/${runId}/approve`);
+  }
+
+  /**
+   * List content ideas for an agent, optionally filtered by status.
+   */
+  async listIdeas(agentId: string, status?: string): Promise<Idea[]> {
+    let path = `/agent/ideas?agent_id=${agentId}`;
+    if (status) path += `&status=${status}`;
+    return this.agentRequest<Idea[]>("GET", path);
+  }
+
+  /**
+   * Update the status of a content idea.
+   * Flow: generated -> approve_to_create -> ready_for_review -> approved -> published
+   */
+  async updateIdeaStatus(ideaId: string | number, status: string): Promise<void> {
+    await this.agentRequest<unknown>(
+      "PUT",
+      `/agent/ideas/${ideaId}/status/${status}`
+    );
+  }
+
+  /**
+   * List agent chat conversations.
+   */
+  async listConversations(agentId?: string): Promise<Conversation[]> {
+    let path = "/agent/conversations";
+    if (agentId) path += `?agent_id=${agentId}`;
+    return this.agentRequest<Conversation[]>("GET", path);
+  }
+
+  /**
+   * Get a conversation with all messages.
+   */
+  async getConversation(conversationId: string): Promise<Conversation> {
+    return this.agentRequest<Conversation>(
+      "GET",
+      `/agent/conversations/${conversationId}`
+    );
+  }
+
+  /**
+   * Soft-delete a conversation.
+   */
+  async deleteConversation(conversationId: string): Promise<void> {
+    await this.agentRequest<unknown>(
+      "DELETE",
+      `/agent/conversations/${conversationId}`
+    );
+  }
+
+  /**
+   * Get the full agent profile (identity + voice + brand config).
+   */
+  async getAgentProfile(agentId: string): Promise<AgentProfile> {
+    return this.agentRequest<AgentProfile>(
+      "GET",
+      `/agent/profile?agent_id=${agentId}`
+    );
+  }
+
+  /**
+   * Update agent profile. Send only the sections/fields to change.
+   * Array fields (keywords, platforms, linked_accounts) are replaced entirely.
+   */
+  async updateAgentProfile(
+    agentId: string,
+    profile: AgentProfileInput
+  ): Promise<AgentProfile> {
+    return this.agentRequest<AgentProfile>(
+      "PUT",
+      `/agent/profile?agent_id=${agentId}`,
+      profile
     );
   }
 }

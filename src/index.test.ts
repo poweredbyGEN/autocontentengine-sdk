@@ -393,4 +393,161 @@ describe("GenClient", () => {
       );
     });
   });
+
+  describe("generation type resolver", () => {
+    it("should resolve 'text' to 'text_generation' when calling generateContent", async () => {
+      const fetchFn = mockFetch(201, { generation_id: "gen-1", status: "pending" });
+      const client = new GenClient({ apiKey: "key", fetch: fetchFn });
+      await client.generateContent("agent-1", "eng-1", "cell-1", "text", { prompt: "hello" });
+      expect(fetchFn).toHaveBeenCalledWith(
+        expect.any(String),
+        expect.objectContaining({
+          body: expect.stringContaining('"generation_type":"text_generation"'),
+        })
+      );
+    });
+
+    it("should resolve 'image_from_text' to 'gemini_image_generation' for gemini models", async () => {
+      const fetchFn = mockFetch(201, { generation_id: "gen-1", status: "pending" });
+      const client = new GenClient({ apiKey: "key", fetch: fetchFn });
+      await client.generateContent("agent-1", "eng-1", "cell-1", "image_from_text", { prompt: "cat", model: "gemini_pro_image" });
+      expect(fetchFn).toHaveBeenCalledWith(
+        expect.any(String),
+        expect.objectContaining({
+          body: expect.stringContaining('"generation_type":"gemini_image_generation"'),
+        })
+      );
+    });
+
+    it("should resolve 'image_from_text' to 'midjourney' for midjourney model", async () => {
+      const fetchFn = mockFetch(201, { generation_id: "gen-1", status: "pending" });
+      const client = new GenClient({ apiKey: "key", fetch: fetchFn });
+      await client.generateContent("agent-1", "eng-1", "cell-1", "image_from_text", { prompt: "cat", model: "midjourney" });
+      expect(fetchFn).toHaveBeenCalledWith(
+        expect.any(String),
+        expect.objectContaining({
+          body: expect.stringContaining('"generation_type":"midjourney"'),
+        })
+      );
+    });
+
+    it("should resolve 'video_from_text' to 'kling' for kling models", async () => {
+      const fetchFn = mockFetch(201, { generation_id: "gen-1", status: "pending" });
+      const client = new GenClient({ apiKey: "key", fetch: fetchFn });
+      await client.generateContent("agent-1", "eng-1", "cell-1", "video_from_text", { prompt: "dance", model: "kling_1_6" });
+      expect(fetchFn).toHaveBeenCalledWith(
+        expect.any(String),
+        expect.objectContaining({
+          body: expect.stringContaining('"generation_type":"kling"'),
+        })
+      );
+    });
+
+    it("should resolve 'speech_from_text' to 'eleven_labs'", async () => {
+      const fetchFn = mockFetch(201, { generation_id: "gen-1", status: "pending" });
+      const client = new GenClient({ apiKey: "key", fetch: fetchFn });
+      await client.generateContent("agent-1", "eng-1", "cell-1", "speech_from_text", { script: "hello" });
+      expect(fetchFn).toHaveBeenCalledWith(
+        expect.any(String),
+        expect.objectContaining({
+          body: expect.stringContaining('"generation_type":"eleven_labs"'),
+        })
+      );
+    });
+
+    it("should pass through legacy names unchanged", async () => {
+      const fetchFn = mockFetch(201, { generation_id: "gen-1", status: "pending" });
+      const client = new GenClient({ apiKey: "key", fetch: fetchFn });
+      await client.generateContent("agent-1", "eng-1", "cell-1", "lipsync", { model: "sync_so" });
+      expect(fetchFn).toHaveBeenCalledWith(
+        expect.any(String),
+        expect.objectContaining({
+          body: expect.stringContaining('"generation_type":"lipsync"'),
+        })
+      );
+    });
+  });
+
+  describe("agent chat", () => {
+    it("generateIdeas should POST to agent.gen.pro", async () => {
+      const fetchFn = mockFetch(202, { run_id: "run-1", conversation_id: "conv-1", status: "running", firebase_path: "/agent_runs/1/run-1/" });
+      const client = new GenClient({ apiKey: "key", fetch: fetchFn });
+      const result = await client.generateIdeas("agent-1", { numIdeas: 3 });
+      expect(result.run_id).toBe("run-1");
+      expect(fetchFn).toHaveBeenCalledWith(
+        "https://agent.gen.pro/v1/agent/run",
+        expect.objectContaining({ method: "POST" })
+      );
+    });
+
+    it("generateIdeas should include requirements in message", async () => {
+      const fetchFn = mockFetch(202, { run_id: "run-1", conversation_id: "conv-1", status: "running", firebase_path: "/" });
+      const client = new GenClient({ apiKey: "key", fetch: fetchFn });
+      await client.generateIdeas("agent-1", { requirements: ["under 12 seconds", "no talking avatar"] });
+      expect(fetchFn).toHaveBeenCalledWith(
+        expect.any(String),
+        expect.objectContaining({
+          body: expect.stringContaining("under 12 seconds"),
+        })
+      );
+    });
+
+    it("refineIdeas should pass conversation_id", async () => {
+      const fetchFn = mockFetch(202, { run_id: "run-2", conversation_id: "conv-1", status: "running", firebase_path: "/" });
+      const client = new GenClient({ apiKey: "key", fetch: fetchFn });
+      await client.refineIdeas("agent-1", "conv-1", "make idea 1 punchier");
+      expect(fetchFn).toHaveBeenCalledWith(
+        expect.any(String),
+        expect.objectContaining({
+          body: expect.stringContaining('"conversation_id":"conv-1"'),
+        })
+      );
+    });
+
+    it("getRunStatus should GET from agent.gen.pro", async () => {
+      const fetchFn = mockFetch(200, { run_id: "run-1", status: "completed", messages: [] });
+      const client = new GenClient({ apiKey: "key", fetch: fetchFn });
+      const result = await client.getRunStatus("run-1");
+      expect(result.status).toBe("completed");
+      expect(fetchFn).toHaveBeenCalledWith(
+        "https://agent.gen.pro/v1/agent/runs/run-1",
+        expect.objectContaining({ method: "GET" })
+      );
+    });
+
+    it("listIdeas should include status filter", async () => {
+      const fetchFn = mockFetch(200, []);
+      const client = new GenClient({ apiKey: "key", fetch: fetchFn });
+      await client.listIdeas("agent-1", "generated");
+      expect(fetchFn).toHaveBeenCalledWith(
+        "https://agent.gen.pro/v1/agent/ideas?agent_id=agent-1&status=generated",
+        expect.any(Object)
+      );
+    });
+
+    it("getAgentProfile should GET from agent.gen.pro", async () => {
+      const fetchFn = mockFetch(200, { identity: { name: "Test" }, voice: {}, brand: null });
+      const client = new GenClient({ apiKey: "key", fetch: fetchFn });
+      const profile = await client.getAgentProfile("agent-1");
+      expect(profile.identity.name).toBe("Test");
+      expect(fetchFn).toHaveBeenCalledWith(
+        "https://agent.gen.pro/v1/agent/profile?agent_id=agent-1",
+        expect.any(Object)
+      );
+    });
+
+    it("should use custom agentBaseUrl when provided", async () => {
+      const fetchFn = mockFetch(200, { run_id: "r", status: "completed", messages: [] });
+      const client = new GenClient({
+        apiKey: "key",
+        agentBaseUrl: "https://custom-agent.example.com/v1",
+        fetch: fetchFn,
+      });
+      await client.getRunStatus("run-1");
+      expect(fetchFn).toHaveBeenCalledWith(
+        "https://custom-agent.example.com/v1/agent/runs/run-1",
+        expect.any(Object)
+      );
+    });
+  });
 });
