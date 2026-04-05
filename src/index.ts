@@ -337,96 +337,114 @@ export type VoiceSource =
   | "public"
   | "user_designed"
   | "user_trained"
-  | "user_elevenlabs";
+  | "user_elevenlabs"
+  | "eleven_labs";
 
-export interface InspirationItem {
+/**
+ * One of the agent's OWN brand social accounts (what it posts from).
+ * NOT an inspiration source — those go in {@link MonitoredItem}.
+ */
+export interface LinkedAccount {
+  /** Existing row id — omit for new accounts. Present on updates. */
   id?: number;
-  url: string;
-  platform?: string;
-}
-
-export interface AccountItem {
-  id?: number;
-  agent_id?: string;
   url: string;
   platform?: string | null;
   display_name?: string | null;
 }
 
-export interface LookReferenceImage {
-  id: number;
-  url: string;
-}
-
-export interface BrandOverview {
-  agent_id?: string;
-  brand_name?: string | null;
-  description?: string | null;
-  identity_type?: "brand" | "character" | null;
-  goal?: string | null;
-  keywords: string[];
-  target_platforms: string[];
-  shortform?: boolean | null;
-  longform?: boolean | null;
-  primary_format?: string | null;
-  onboarding_status?: string | null;
-}
-
-export interface AgentCoreIdentity {
-  name?: string | null;
-  profile_photo_url?: string | null;
-}
-
-export interface AgentCoreVoice {
-  voice_id: string;
-  name?: string | null;
-  source?: VoiceSource;
-}
-
-export interface AgentCoreLook {
-  description?: string | null;
-  reference_images: LookReferenceImage[];
-}
-
-export interface AgentCore {
-  identity: AgentCoreIdentity;
-  overview: BrandOverview;
-  personality: string | null;
-  inspiration: InspirationItem[];
-  voice: AgentCoreVoice | null;
-  look: AgentCoreLook;
-  accounts: AccountItem[];
+/**
+ * One inspiration source the agent monitors for trending content.
+ * Stored in `trendpulse_configs.monitored`.
+ */
+export interface MonitoredItem {
+  /**
+   * For `item_type="account"`: a @handle or URL.
+   * For `"hashtag"`: the tag (with or without `#`).
+   * For `"keyword"`: a plain search term.
+   */
+  handle: string;
+  item_type: "account" | "hashtag" | "keyword";
 }
 
 /**
- * Merge-patch payload for PATCH /v1/agents/{id}/core.
- * Any field may be omitted. Merge semantics for identity/overview/look.description.
- * Replace semantics for personality/inspiration/voice/accounts.
+ * Reference to a voice resource attached to the agent.
+ * Written to Rails `agents.default_user_voice_attributes`.
+ */
+export interface VoiceRef {
+  voice_id: string;
+  source?: VoiceSource;
+  name?: string | null;
+}
+
+/**
+ * Full agent setup — the response from {@link GenClient.getAgentCore}.
+ * Flat shape: every field mirrors what the GEN Setup canvas saves.
+ */
+export interface AgentCore {
+  agent_id: string;
+  brand_name: string | null;
+  description: string | null;
+  identity_type: "brand" | "character" | null;
+  goal: string | null;
+  target_platforms: string[];
+  shortform: boolean | null;
+  longform: boolean | null;
+  onboarding_status: string | null;
+  /** Flat keyword list. */
+  keywords: string[];
+  /** Inspiration sources: accounts, hashtags, or keywords to watch. */
+  monitored: MonitoredItem[];
+  /** The agent's OWN brand social links. */
+  linked_accounts: LinkedAccount[];
+  /** Full persona text. Canonical source is Rails `project_nodes`. */
+  personality: string | null;
+  default_user_voice: VoiceRef | null;
+}
+
+/**
+ * Flat merge-patch payload for PATCH /v1/agents/{id}/core.
+ *
+ * Every field is optional — send only what you want to change. Field names
+ * map 1:1 to upstream storage:
+ * - Most fields → TrendPulse `/v1/trendpulse/settings`
+ * - `personality` → Rails `project_nodes` (`node_type='personality'`)
+ * - `default_user_voice` → Rails `agents.default_user_voice_attributes`
+ *
+ * **Validation guardrails:**
+ * - Unknown fields return 422.
+ * - `description` max 500 chars. `personality` max 20000 chars.
+ * - `identity_type` strict enum (`"brand"` | `"character"`).
+ * - `monitored[].item_type` strict enum (`"account"` | `"hashtag"` | `"keyword"`).
+ *
+ * **List replacement semantics:** `keywords`, `target_platforms`, `monitored`,
+ * and `linked_accounts` use full-list replacement. To add one row without
+ * touching others, call {@link GenClient.getAgentCore} first, append, then PATCH.
+ *
+ * **Keyword auto-mirror:** if you send `keywords` without `monitored`, the
+ * backend auto-populates `monitored` with `{handle: kw, item_type: "keyword"}`
+ * entries so the monitoring cron stays in sync.
  */
 export interface AgentCorePatch {
-  identity?: Partial<AgentCoreIdentity>;
-  overview?: {
-    brand_name?: string;
-    description?: string;
-    identity_type?: "brand" | "character";
-    goal?: string;
-    keywords?: string[];
-    target_platforms?: string[];
-    shortform?: boolean;
-    longform?: boolean;
-    onboarding_status?: string;
-  };
+  brand_name?: string;
+  description?: string;
+  identity_type?: "brand" | "character";
+  goal?: string;
+  target_platforms?: string[];
+  shortform?: boolean;
+  longform?: boolean;
+  onboarding_status?: string;
+  keywords?: string[];
+  monitored?: MonitoredItem[];
+  linked_accounts?: LinkedAccount[];
   personality?: string;
-  inspiration?: Array<{ url: string; platform?: string }>;
-  look?: { description?: string };
-  voice?: { voice_id: string; source?: VoiceSource };
-  accounts?: Array<{ url: string; platform?: string; display_name?: string }>;
+  default_user_voice?: VoiceRef;
 }
 
 /**
- * Response from PATCH /core. One entry per section that was submitted;
- * each entry has `status: "ok"` with `data`, or `status: "error"` with `error`.
- * 207 Multi-Status is returned if any section failed.
+ * Response from PATCH /core. One entry per **upstream target** that the
+ * patch touched (`trendpulse`, `personality`, `voice`). Each entry has
+ * `status: "ok"` with `data`, or `status: "error"` with `error`. 207
+ * Multi-Status is returned if any target failed.
  */
 export interface AgentCorePatchResultEntry {
   status: "ok" | "error";
@@ -1309,25 +1327,44 @@ export class GenClient {
   }
 
   // ── Agent Core (GEN-2755) ─────────────────────────────────────────────
-  // Single-endpoint read/write for the agent setup canvas — identity,
-  // overview, personality, inspiration, voice, look, and accounts.
-  // Prefer these over the legacy /agent/profile methods for new code.
+  // Flat one-call read/write for the agent setup canvas. Every field name
+  // mirrors exactly what the GEN Setup canvas FE saves. Prefer these over
+  // the legacy /agent/profile methods for new code.
 
   /**
-   * Get every section of the agent setup canvas in one call: identity,
-   * overview (brand profile), personality, inspiration, voice, look, accounts.
+   * Get the agent's full setup as a flat object. Returns `brand_name`,
+   * `description`, `identity_type`, `goal`, `target_platforms`, `shortform`,
+   * `longform`, `onboarding_status`, `keywords`, `monitored` (inspiration
+   * sources), `linked_accounts` (the agent's OWN brand socials),
+   * `personality`, and `default_user_voice`.
+   *
+   * Call this BEFORE updating if you plan to append to `linked_accounts` or
+   * `monitored` — those lists use full-list replacement on PATCH.
    */
   async getAgentCore(agentId: string): Promise<AgentCore> {
     return this.request<AgentCore>("GET", `/agents/${agentId}/core`);
   }
 
   /**
-   * Update any combination of setup sections in one call. Merge semantics
-   * for `identity`, `overview`, `look.description`; replace semantics for
-   * `personality`, `inspiration`, `voice`, `accounts`.
+   * Update the agent's setup with a flat merge-patch. Send only the fields
+   * you want to change.
    *
-   * Returns per-section results. Throws on 207 Multi-Status only if every
-   * section failed; partial failures return the mixed result map.
+   * Internally this fans out to up to three upstream services:
+   * - Brand fields → TrendPulse `/v1/trendpulse/settings` (single call
+   *   covering brand_name, description, identity_type, goal, keywords,
+   *   monitored, target_platforms, shortform, longform, onboarding_status,
+   *   linked_accounts)
+   * - `personality` → Rails `project_nodes` (node_type='personality')
+   * - `default_user_voice` → Rails `agents.default_user_voice_attributes`
+   *
+   * Returns a per-target result map. Keys are `trendpulse`, `personality`,
+   * and `voice` — only the targets your patch actually touched appear.
+   * A 207 Multi-Status means at least one target errored; check each entry's
+   * `status` field. No throw on 207 — the mixed result map is returned so
+   * you can decide what to retry.
+   *
+   * See {@link AgentCorePatch} for field-level semantics, guardrails, and
+   * the `linked_accounts` / `monitored` full-list replacement rules.
    */
   async patchAgentCore(
     agentId: string,
@@ -1337,53 +1374,6 @@ export class GenClient {
       "PATCH",
       `/agents/${agentId}/core`,
       patch
-    );
-  }
-
-  /** Append one inspiration source (a creator the agent draws style from). */
-  async addAgentInspiration(
-    agentId: string,
-    url: string,
-    platform?: string
-  ): Promise<InspirationItem> {
-    return this.request<InspirationItem>(
-      "POST",
-      `/agents/${agentId}/core/inspiration`,
-      { url, platform }
-    );
-  }
-
-  /** Remove one inspiration source by id. */
-  async removeAgentInspiration(
-    agentId: string,
-    itemId: number | string
-  ): Promise<void> {
-    await this.request<void>(
-      "DELETE",
-      `/agents/${agentId}/core/inspiration/${itemId}`
-    );
-  }
-
-  /** Append one of the agent's OWN social accounts. */
-  async addAgentAccount(
-    agentId: string,
-    account: { url: string; platform?: string; display_name?: string }
-  ): Promise<AccountItem> {
-    return this.request<AccountItem>(
-      "POST",
-      `/agents/${agentId}/core/accounts`,
-      account
-    );
-  }
-
-  /** Remove one linked account by id. */
-  async removeAgentAccount(
-    agentId: string,
-    accountId: number | string
-  ): Promise<void> {
-    await this.request<void>(
-      "DELETE",
-      `/agents/${agentId}/core/accounts/${accountId}`
     );
   }
 
