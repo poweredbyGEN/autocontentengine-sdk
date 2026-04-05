@@ -331,6 +331,137 @@ export interface GenerateIdeasOptions {
   message?: string;
 }
 
+// ── Agent Core (GEN-2755) ───────────────────────────────────────────────────
+
+export type VoiceSource =
+  | "public"
+  | "user_designed"
+  | "user_trained"
+  | "user_elevenlabs";
+
+export interface InspirationItem {
+  id?: number;
+  url: string;
+  platform?: string;
+}
+
+export interface AccountItem {
+  id?: number;
+  agent_id?: string;
+  url: string;
+  platform?: string | null;
+  display_name?: string | null;
+}
+
+export interface LookReferenceImage {
+  id: number;
+  url: string;
+}
+
+export interface BrandOverview {
+  agent_id?: string;
+  brand_name?: string | null;
+  description?: string | null;
+  identity_type?: "brand" | "character" | null;
+  goal?: string | null;
+  keywords: string[];
+  target_platforms: string[];
+  shortform?: boolean | null;
+  longform?: boolean | null;
+  primary_format?: string | null;
+  onboarding_status?: string | null;
+}
+
+export interface AgentCoreIdentity {
+  name?: string | null;
+  profile_photo_url?: string | null;
+}
+
+export interface AgentCoreVoice {
+  voice_id: string;
+  name?: string | null;
+  source?: VoiceSource;
+}
+
+export interface AgentCoreLook {
+  description?: string | null;
+  reference_images: LookReferenceImage[];
+}
+
+export interface AgentCore {
+  identity: AgentCoreIdentity;
+  overview: BrandOverview;
+  personality: string | null;
+  inspiration: InspirationItem[];
+  voice: AgentCoreVoice | null;
+  look: AgentCoreLook;
+  accounts: AccountItem[];
+}
+
+/**
+ * Merge-patch payload for PATCH /v1/agents/{id}/core.
+ * Any field may be omitted. Merge semantics for identity/overview/look.description.
+ * Replace semantics for personality/inspiration/voice/accounts.
+ */
+export interface AgentCorePatch {
+  identity?: Partial<AgentCoreIdentity>;
+  overview?: {
+    brand_name?: string;
+    description?: string;
+    identity_type?: "brand" | "character";
+    goal?: string;
+    keywords?: string[];
+    target_platforms?: string[];
+    shortform?: boolean;
+    longform?: boolean;
+    onboarding_status?: string;
+  };
+  personality?: string;
+  inspiration?: Array<{ url: string; platform?: string }>;
+  look?: { description?: string };
+  voice?: { voice_id: string; source?: VoiceSource };
+  accounts?: Array<{ url: string; platform?: string; display_name?: string }>;
+}
+
+/**
+ * Response from PATCH /core. One entry per section that was submitted;
+ * each entry has `status: "ok"` with `data`, or `status: "error"` with `error`.
+ * 207 Multi-Status is returned if any section failed.
+ */
+export interface AgentCorePatchResultEntry {
+  status: "ok" | "error";
+  data?: unknown;
+  error?: string;
+}
+
+export type AgentCorePatchResult = Record<string, AgentCorePatchResultEntry>;
+
+export interface VoiceLibraryItem {
+  voice_id: string;
+  name: string | null;
+  source: VoiceSource;
+  preview_url: string | null;
+}
+
+export interface UserVoiceResource {
+  id: number;
+  name: string;
+  gender?: string | null;
+  language?: string | null;
+  description?: string | null;
+  hume_ai_voice_id?: string | null;
+  file_url?: string | null;
+}
+
+export interface UserJob {
+  id: number;
+  user_job_type: string;
+  status: "pending" | "processing" | "completed" | "failed" | "stopped";
+  result?: unknown;
+  output_resources?: OutputResource[];
+  error?: string;
+}
+
 // ── Client ───────────────────────────────────────────────────────────────────
 
 /**
@@ -1152,6 +1283,7 @@ export class GenClient {
 
   /**
    * Get the full agent profile (identity + voice + brand config).
+   * @deprecated Prefer `getAgentCore` — single-call read of every setup section.
    */
   async getAgentProfile(agentId: string): Promise<AgentProfile> {
     return this.agentRequest<AgentProfile>(
@@ -1163,6 +1295,7 @@ export class GenClient {
   /**
    * Update agent profile. Send only the sections/fields to change.
    * Array fields (keywords, platforms, linked_accounts) are replaced entirely.
+   * @deprecated Prefer `patchAgentCore` — same one-call semantics with better payload structure.
    */
   async updateAgentProfile(
     agentId: string,
@@ -1173,5 +1306,262 @@ export class GenClient {
       `/agent/profile?agent_id=${agentId}`,
       profile
     );
+  }
+
+  // ── Agent Core (GEN-2755) ─────────────────────────────────────────────
+  // Single-endpoint read/write for the agent setup canvas — identity,
+  // overview, personality, inspiration, voice, look, and accounts.
+  // Prefer these over the legacy /agent/profile methods for new code.
+
+  /**
+   * Get every section of the agent setup canvas in one call: identity,
+   * overview (brand profile), personality, inspiration, voice, look, accounts.
+   */
+  async getAgentCore(agentId: string): Promise<AgentCore> {
+    return this.request<AgentCore>("GET", `/agents/${agentId}/core`);
+  }
+
+  /**
+   * Update any combination of setup sections in one call. Merge semantics
+   * for `identity`, `overview`, `look.description`; replace semantics for
+   * `personality`, `inspiration`, `voice`, `accounts`.
+   *
+   * Returns per-section results. Throws on 207 Multi-Status only if every
+   * section failed; partial failures return the mixed result map.
+   */
+  async patchAgentCore(
+    agentId: string,
+    patch: AgentCorePatch
+  ): Promise<AgentCorePatchResult> {
+    return this.request<AgentCorePatchResult>(
+      "PATCH",
+      `/agents/${agentId}/core`,
+      patch
+    );
+  }
+
+  /** Append one inspiration source (a creator the agent draws style from). */
+  async addAgentInspiration(
+    agentId: string,
+    url: string,
+    platform?: string
+  ): Promise<InspirationItem> {
+    return this.request<InspirationItem>(
+      "POST",
+      `/agents/${agentId}/core/inspiration`,
+      { url, platform }
+    );
+  }
+
+  /** Remove one inspiration source by id. */
+  async removeAgentInspiration(
+    agentId: string,
+    itemId: number | string
+  ): Promise<void> {
+    await this.request<void>(
+      "DELETE",
+      `/agents/${agentId}/core/inspiration/${itemId}`
+    );
+  }
+
+  /** Append one of the agent's OWN social accounts. */
+  async addAgentAccount(
+    agentId: string,
+    account: { url: string; platform?: string; display_name?: string }
+  ): Promise<AccountItem> {
+    return this.request<AccountItem>(
+      "POST",
+      `/agents/${agentId}/core/accounts`,
+      account
+    );
+  }
+
+  /** Remove one linked account by id. */
+  async removeAgentAccount(
+    agentId: string,
+    accountId: number | string
+  ): Promise<void> {
+    await this.request<void>(
+      "DELETE",
+      `/agents/${agentId}/core/accounts/${accountId}`
+    );
+  }
+
+  // ── Agent Voice (GEN-2755) ────────────────────────────────────────────
+
+  /**
+   * List voices available to the agent. Sources: `public` (shared catalog),
+   * `user_designed` (via prompt flow), `user_trained` (from audio), and
+   * `user_elevenlabs` (from the agent's connected ElevenLabs key).
+   */
+  async listAgentVoices(
+    agentId: string,
+    source?: VoiceSource
+  ): Promise<{ voices: VoiceLibraryItem[]; total: number }> {
+    const suffix = source ? `?source=${source}` : "";
+    return this.request<{ voices: VoiceLibraryItem[]; total: number }>(
+      "GET",
+      `/agents/${agentId}/voice/library${suffix}`
+    );
+  }
+
+  /** Check whether the agent has an ElevenLabs key connected. */
+  async getElevenLabsStatus(
+    agentId: string
+  ): Promise<{ connected: boolean; masked_key: string | null }> {
+    return this.request("GET", `/agents/${agentId}/voice/integrations/elevenlabs`);
+  }
+
+  /**
+   * Connect the user's ElevenLabs API key to the agent. Validates the key
+   * against ElevenLabs /v1/user before saving. Throws GenApiError("invalid_key")
+   * on 400.
+   */
+  async connectElevenLabs(
+    agentId: string,
+    apiKey: string
+  ): Promise<{ connected: boolean; user?: unknown }> {
+    return this.request(
+      "POST",
+      `/agents/${agentId}/voice/integrations/elevenlabs`,
+      { api_key: apiKey }
+    );
+  }
+
+  /** Test an ElevenLabs key without saving it. */
+  async testElevenLabsKey(
+    agentId: string,
+    apiKey: string
+  ): Promise<{ valid: boolean }> {
+    return this.request(
+      "POST",
+      `/agents/${agentId}/voice/integrations/elevenlabs/test`,
+      { api_key: apiKey }
+    );
+  }
+
+  /** Disconnect the ElevenLabs key from the agent. */
+  async disconnectElevenLabs(agentId: string): Promise<void> {
+    await this.request("DELETE", `/agents/${agentId}/voice/integrations/elevenlabs`);
+  }
+
+  /**
+   * Voice design step 1/4 — generate a read-aloud script the candidate
+   * voice will speak in step 3.
+   */
+  async generateVoiceScript(
+    agentId: string,
+    language?: string
+  ): Promise<{ voice_sample: string }> {
+    return this.request(
+      "POST",
+      `/agents/${agentId}/voice/design/generate-script`,
+      language ? { language } : {}
+    );
+  }
+
+  /** Voice design step 2/4 — generate style descriptors. Requires gender. */
+  async generateVoiceDescription(
+    agentId: string,
+    params: {
+      gender: string;
+      voice_description?: string;
+      language?: string;
+      script?: string;
+    }
+  ): Promise<{ voice_description: string }> {
+    return this.request(
+      "POST",
+      `/agents/${agentId}/voice/design/generate-description`,
+      params
+    );
+  }
+
+  /**
+   * Voice design step 3/4 — generate 3 candidate audio samples. Returns
+   * `{samples: [{generation_id, audio}, ...]}`. Pick one and pass its
+   * `generation_id` to `finalizeDesignedVoice`.
+   */
+  async generateVoiceSamples(
+    agentId: string,
+    params: { text: string; description?: string }
+  ): Promise<{ samples: Array<{ generation_id: string; audio: string }> }> {
+    return this.request(
+      "POST",
+      `/agents/${agentId}/voice/design/generate-samples`,
+      params
+    );
+  }
+
+  /** Voice design step 4/4 — persist a designed voice by generation_id. */
+  async finalizeDesignedVoice(
+    agentId: string,
+    params: {
+      generation_id: string;
+      name: string;
+      gender?: string;
+      language?: string;
+      description?: string;
+    }
+  ): Promise<UserVoiceResource> {
+    return this.request("POST", `/agents/${agentId}/voice/design`, params);
+  }
+
+  /**
+   * Clone a voice from an existing audio sample. Synchronous — returns the
+   * created voice immediately. Pass EITHER `audio_url` (preferred — server
+   * downloads) OR `audio_base64` (inline bytes for small clips).
+   */
+  async cloneVoice(
+    agentId: string,
+    params: {
+      name: string;
+      audio_url?: string;
+      audio_base64?: string;
+      gender?: string;
+      language?: string;
+      description?: string;
+    }
+  ): Promise<UserVoiceResource> {
+    if (!params.audio_url && !params.audio_base64) {
+      throw new Error("cloneVoice requires audio_url or audio_base64");
+    }
+    if (params.audio_url && params.audio_base64) {
+      throw new Error("cloneVoice: provide audio_url OR audio_base64, not both");
+    }
+    return this.request("POST", `/agents/${agentId}/voice/clone`, params);
+  }
+
+  /** Delete a user-owned voice (designed, trained, or connected). */
+  async deleteVoice(
+    agentId: string,
+    voiceId: string | number
+  ): Promise<void> {
+    await this.request("DELETE", `/agents/${agentId}/voice/${voiceId}`);
+  }
+
+  /**
+   * Enqueue a TTS preview job. ASYNC — returns `{user_job_id}` immediately.
+   * Poll with `getVoicePreviewStatus` until status=='completed', then read
+   * the audio URL from the job's `output_resources`.
+   */
+  async previewVoice(
+    agentId: string,
+    voiceId: string,
+    text: string
+  ): Promise<{ user_job_id: number }> {
+    return this.request(
+      "POST",
+      `/agents/${agentId}/voice/${voiceId}/preview`,
+      { text }
+    );
+  }
+
+  /** Poll the status of a TTS preview job. */
+  async getVoicePreviewStatus(
+    agentId: string,
+    jobId: string | number
+  ): Promise<UserJob> {
+    return this.request("GET", `/agents/${agentId}/voice/preview/${jobId}`);
   }
 }
