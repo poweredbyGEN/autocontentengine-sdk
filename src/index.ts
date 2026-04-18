@@ -625,20 +625,6 @@ export interface CreateContentResourceParams {
   asset_folder_id?: string;
 }
 
-// ── Vidsheet from Idea (stub — Rails endpoint coming in a separate PR) ────
-
-export interface CreateVidsheetFromIdeaParams {
-  agent_id: string | number;
-  idea_id: string | number;
-  title?: string;
-}
-
-export interface CreateVidsheetFromIdeaResult {
-  engine_id: number | string;
-  idea_id: number | string;
-  [key: string]: unknown;
-}
-
 // ── Client ───────────────────────────────────────────────────────────────────
 
 /**
@@ -1781,23 +1767,6 @@ export class GenClient {
     );
   }
 
-  // ── Vidsheet from Idea (Step 3) ────────────────────────────────────────
-
-  /**
-   * Create a new engine (vidsheet) seeded from a content idea. Stub wired to
-   * `POST /v1/vidsheet/from_idea` — the Rails endpoint is shipping in a
-   * separate PR. Phase: Step 3 (Convert Idea to Vidsheet).
-   */
-  async createVidsheetFromIdea(
-    params: CreateVidsheetFromIdeaParams
-  ): Promise<CreateVidsheetFromIdeaResult> {
-    return this.request<CreateVidsheetFromIdeaResult>(
-      "POST",
-      "/vidsheet/from_idea",
-      params
-    );
-  }
-
   // ── Columns (CRUD) ─────────────────────────────────────────────────────
 
   /**
@@ -2415,7 +2384,6 @@ export function createSdk(client: GenClient) {
       listTemplates: client.listTemplates.bind(client),
       getTemplate: client.getTemplate.bind(client),
       cloneTemplate: client.cloneTemplate.bind(client),
-      createVidsheetFromIdea: client.createVidsheetFromIdea.bind(client),
       createEngine: client.createEngine.bind(client),
       getEngine: client.getEngine.bind(client),
       cloneEngine: client.cloneEngine.bind(client),

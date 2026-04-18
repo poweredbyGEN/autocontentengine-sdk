@@ -80,13 +80,8 @@ const idea = ideas[0];
 
 // Step 3 — Convert Idea to Vidsheet
 const engine = await sdk.vidsheet.cloneTemplate("ugc-talking-avatar", agent.id);
-// Or, once GEN-2879's Rails endpoint ships:
-// const { engine_id } = await sdk.vidsheet.createVidsheetFromIdea({
-//   agent_id: agent.id,
-//   idea_id: idea.id,
-// });
 
-// Step 4 — Edit & Generate
+// Step 4 — Edit & Generate: inject the idea's fields into the cloned vidsheet
 const row = await sdk.edit.createRow(agent.id, engine.id);
 const promptCell = row.cells![0];
 await sdk.edit.updateCell(agent.id, engine.id, promptCell.id, idea.hook);
@@ -195,12 +190,6 @@ const engine = await sdk.vidsheet.cloneTemplate("ugc-talking-avatar", agent.id);
 
 // Option B: create an empty engine
 const empty = await sdk.vidsheet.createEngine(agent.id, "My Engine");
-
-// Option C: create directly from an idea (endpoint shipping in a separate PR)
-const { engine_id } = await sdk.vidsheet.createVidsheetFromIdea({
-  agent_id: agent.id,
-  idea_id: idea.id,
-});
 ```
 
 ## Step 4 — Edit & Generate
@@ -305,7 +294,7 @@ Every method is available on both `client.methodName(...)` and on the matching n
 
 **Step 2 — `sdk.ideas`:** `generateIdeas`, `refineIdeas`, `setContentPreference`, `runResearch`, `getRunStatus`, `waitForRun`, `approveRun`, `listIdeas`, `updateIdeaStatus`, `listConversations`, `getConversation`, `deleteConversation`, `createMonitoringJob`, `updateMonitoringJob`.
 
-**Step 3 — `sdk.vidsheet`:** `listTemplates`, `getTemplate`, `cloneTemplate`, `createVidsheetFromIdea`, `createEngine`, `getEngine`, `cloneEngine`.
+**Step 3 — `sdk.vidsheet`:** `listTemplates`, `getTemplate`, `cloneTemplate`, `createEngine`, `getEngine`, `cloneEngine`.
 
 **Step 4 — `sdk.edit`:** `listRows`, `createRow`, `duplicateRow`, `listColumns`, `createColumn`, `updateColumn`, `deleteColumn`, `getCell`, `updateCell`, `createLayer`, `getLayer`, `updateLayer`, `deleteLayer`, `listVariables`, `createVariable`, `updateVariable`, `deleteVariable`, `listAssetLibraries`, `listContentResources`, `getContentResource`, `createContentResource`, `updateContentResource`, `deleteContentResource`, `createDirectUpload`, `generateContent`, `generateLayer`, `getGeneration`, `stopGeneration`, `continueGeneration`, `waitForGeneration`.
 
