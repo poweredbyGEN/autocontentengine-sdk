@@ -431,6 +431,42 @@ export interface Generation {
   [key: string]: unknown;
 }
 
+/** Transcribe only a window of the media instead of the whole file. */
+export interface TranscribeTrim {
+  start_seconds: number;
+  duration_seconds: number;
+}
+
+/**
+ * Source for {@link GenClient.transcribe} — exactly one of `audioUrl`,
+ * `videoUrl`, or `contentResourceId`. `trim` applies to the URL sources only.
+ */
+export interface TranscribeParams {
+  agentId: string | number;
+  /** Public URL to an audio file. */
+  audioUrl?: string;
+  /** Public URL to a video; its audio is extracted server-side. */
+  videoUrl?: string;
+  /** Id of a file already stored in the agent's GEN content resources. */
+  contentResourceId?: string | number;
+  trim?: TranscribeTrim;
+}
+
+/** One timestamped sentence of a completed transcript. */
+export interface TranscriptSentence {
+  text: string;
+  startMs: number;
+  endMs: number;
+}
+
+/** The `result` of a completed transcription generation. */
+export interface TranscriptionResult {
+  full_text: string;
+  sentences: TranscriptSentence[];
+  audio_duration: number;
+  [key: string]: unknown;
+}
+
 export interface OutputResource {
   id: number | string;
   url: string;
@@ -1479,6 +1515,63 @@ export class GenClient {
       "POST",
       `/vidsheet/${encodeURIComponent(String(engineId))}/cells/${encodeURIComponent(String(cellId))}/layers/${encodeURIComponent(String(layerId))}/generate${this.buildAgentQuery(agentId)}`,
       {}
+    );
+  }
+
+  /**
+   * Transcribe audio or video into text with per-sentence timestamps.
+   *
+   * Pass exactly ONE source: `audioUrl` (public audio URL), `videoUrl` (public
+   * video URL — its audio is extracted server-side) or `contentResourceId` (a
+   * file already stored in the agent's content resources). `trim` transcribes
+   * only a window of the media and applies to the URL sources only.
+   *
+   * Asynchronous: returns `{generation_id, status}` immediately. Poll with
+   * {@link getGeneration} (or {@link waitForGeneration}) until status is
+   * "completed"; the generation's `result` is then a {@link TranscriptionResult}
+   * carrying `full_text`, timestamped `sentences` ({text, startMs, endMs}) and
+   * `audio_duration`.
+   *
+   * Paid — credits are charged by audio duration, so cost scales with the length
+   * of the recording. Out of credits surfaces error_code
+   * `insufficient_credits_for_job`.
+   *
+   * @param params - The agent plus exactly one media source, and optional trim.
+   * @returns Object with generation_id and status.
+   * @throws {Error} If zero or more than one source is supplied.
+   */
+  async transcribe(params: TranscribeParams): Promise<GenerationResult> {
+    const { agentId, audioUrl, videoUrl, contentResourceId, trim } = params;
+
+    const supplied = [
+      audioUrl && "audioUrl",
+      videoUrl && "videoUrl",
+      contentResourceId !== undefined && contentResourceId !== null && "contentResourceId",
+    ].filter(Boolean) as string[];
+    if (supplied.length !== 1) {
+      throw new Error(
+        `transcribe requires exactly one of audioUrl, videoUrl, or contentResourceId (got ${
+          supplied.length === 0 ? "none" : supplied.join(", ")
+        })`
+      );
+    }
+
+    let data: Record<string, unknown>;
+    if (contentResourceId !== undefined && contentResourceId !== null) {
+      // The content-resource branch is resolved server-side before the
+      // audio/video schema runs, and does not carry a trim window.
+      data = { content_resource_id: String(contentResourceId) };
+    } else {
+      data = audioUrl
+        ? { audio: { value: audioUrl } }
+        : { video: { value: videoUrl } };
+      if (trim) data.trim = trim;
+    }
+
+    return this.request<GenerationResult>(
+      "POST",
+      `/transcriptions${this.buildAgentQuery(agentId)}`,
+      { data }
     );
   }
 
@@ -3171,6 +3264,7 @@ export function createSdk(client: GenClient) {
       // Generations
       generateContent: client.generateContent.bind(client),
       generateLayer: client.generateLayer.bind(client),
+      transcribe: client.transcribe.bind(client),
       getGeneration: client.getGeneration.bind(client),
       stopGeneration: client.stopGeneration.bind(client),
       continueGeneration: client.continueGeneration.bind(client),

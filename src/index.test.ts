@@ -241,6 +241,94 @@ describe("GenClient", () => {
       );
     });
 
+    it("generateContent should pass 'transcription' through to Rails unchanged", async () => {
+      const fetchFn = mockFetch(201, { generation_id: 5, status: "pending" });
+      const client = new GenClient({ apiKey: "key", fetch: fetchFn });
+      await client.generateContent("a1", "e1", "c1", "transcription", {
+        audio: { value: "https://cdn.gen.pro/a.mp3" },
+      });
+      expect(fetchFn).toHaveBeenCalledWith(
+        expect.any(String),
+        expect.objectContaining({
+          body: expect.stringContaining('"generation_type":"transcription"'),
+        })
+      );
+    });
+
+    it("transcribe should POST /transcriptions with an audio source", async () => {
+      const fetchFn = mockFetch(201, { generation_id: 4242, status: "pending" });
+      const client = new GenClient({ apiKey: "key", fetch: fetchFn });
+      const result = await client.transcribe({
+        agentId: "a1",
+        audioUrl: "https://cdn.gen.pro/a.mp3",
+      });
+      expect(result.generation_id).toBe(4242);
+      expect(fetchFn).toHaveBeenCalledWith(
+        expect.stringContaining("/transcriptions?agent_id=a1"),
+        expect.objectContaining({
+          method: "POST",
+          body: JSON.stringify({
+            data: { audio: { value: "https://cdn.gen.pro/a.mp3" } },
+          }),
+        })
+      );
+    });
+
+    it("transcribe should send a video source with a trim window", async () => {
+      const fetchFn = mockFetch(201, { generation_id: 7, status: "pending" });
+      const client = new GenClient({ apiKey: "key", fetch: fetchFn });
+      await client.transcribe({
+        agentId: "a1",
+        videoUrl: "https://cdn.gen.pro/v.mp4",
+        trim: { start_seconds: 5, duration_seconds: 30 },
+      });
+      expect(fetchFn).toHaveBeenCalledWith(
+        expect.any(String),
+        expect.objectContaining({
+          body: JSON.stringify({
+            data: {
+              video: { value: "https://cdn.gen.pro/v.mp4" },
+              trim: { start_seconds: 5, duration_seconds: 30 },
+            },
+          }),
+        })
+      );
+    });
+
+    it("transcribe should send only content_resource_id for a stored file", async () => {
+      const fetchFn = mockFetch(201, { generation_id: 8, status: "pending" });
+      const client = new GenClient({ apiKey: "key", fetch: fetchFn });
+      await client.transcribe({ agentId: "a1", contentResourceId: 991 });
+      expect(fetchFn).toHaveBeenCalledWith(
+        expect.any(String),
+        expect.objectContaining({
+          body: JSON.stringify({ data: { content_resource_id: "991" } }),
+        })
+      );
+    });
+
+    it("transcribe should reject two sources without calling the API", async () => {
+      const fetchFn = mockFetch(201, {});
+      const client = new GenClient({ apiKey: "key", fetch: fetchFn });
+      await expect(
+        client.transcribe({
+          agentId: "a1",
+          audioUrl: "https://cdn.gen.pro/a.mp3",
+          videoUrl: "https://cdn.gen.pro/v.mp4",
+        })
+      ).rejects.toThrow(/exactly one/);
+      expect(fetchFn).not.toHaveBeenCalled();
+    });
+
+    it("transcribe should reject a call with no source", async () => {
+      const fetchFn = mockFetch(201, {});
+      const client = new GenClient({ apiKey: "key", fetch: fetchFn });
+      await expect(client.transcribe({ agentId: "a1" })).rejects.toThrow(
+        /exactly one/
+      );
+      expect(fetchFn).not.toHaveBeenCalled();
+    });
+
     it("stopGeneration should POST /generations/:id/stop", async () => {
       const fetchFn = mockFetch(200, {});
       const client = new GenClient({ apiKey: "key", fetch: fetchFn });
