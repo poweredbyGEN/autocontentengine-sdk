@@ -258,6 +258,21 @@ Pass canonical types to `generateContent`. The SDK resolves the backend job shap
 | `speech_from_text` | `script`, `voice_method`, `voice_id?` |
 | `lipsync` | `model`, `video_resource_id`, `audio_resource_id` |
 | `captions` | `model`, `source_resource_id` |
+| `transcription` | `audio` \| `video` \| `content_resource_id`, `trim?` |
+
+For transcription outside a Vidsheet cell, call `sdk.edit.transcribe(...)`
+directly — it posts the same shape to `/transcriptions` and returns a
+`generation_id` to poll:
+
+```ts
+const job = await sdk.edit.transcribe({
+  agentId: "agent-1",
+  videoUrl: "https://example.com/interview.mp4",
+  trim: { start_seconds: 0, duration_seconds: 120 },
+});
+const done = await sdk.edit.waitForGeneration(job.generation_id);
+// done.result -> { full_text, sentences: [{ text, startMs, endMs }], audio_duration }
+```
 
 ## Error handling
 
@@ -295,7 +310,7 @@ Every method is available on both `client.methodName(...)` and on the matching n
 
 **Step 3 — `sdk.vidsheet`:** `listTemplates`, `getTemplate`, `cloneTemplate`, `createEngine`, `getEngine`, `cloneEngine`.
 
-**Step 4 — `sdk.edit`:** `listRows`, `createRow`, `duplicateRow`, `listColumns`, `createColumn`, `updateColumn`, `deleteColumn`, `getCell`, `updateCell`, `createLayer`, `getLayer`, `updateLayer`, `deleteLayer`, `listVariables`, `createVariable`, `updateVariable`, `deleteVariable`, `listAssetLibraries`, `listContentResources`, `getContentResource`, `createContentResource`, `updateContentResource`, `deleteContentResource`, `createDirectUpload`, `generateContent`, `generateLayer`, `getGeneration`, `stopGeneration`, `continueGeneration`, `waitForGeneration`.
+**Step 4 — `sdk.edit`:** `listRows`, `createRow`, `duplicateRow`, `listColumns`, `createColumn`, `updateColumn`, `deleteColumn`, `getCell`, `updateCell`, `createLayer`, `getLayer`, `updateLayer`, `deleteLayer`, `listVariables`, `createVariable`, `updateVariable`, `deleteVariable`, `listAssetLibraries`, `listContentResources`, `getContentResource`, `createContentResource`, `updateContentResource`, `deleteContentResource`, `createDirectUpload`, `generateContent`, `generateLayer`, `transcribe`, `getGeneration`, `stopGeneration`, `continueGeneration`, `waitForGeneration`.
 
 **Step 5 — `sdk.export`:** `renderVideo`, `publishContent`, `waitForGeneration`.
 
